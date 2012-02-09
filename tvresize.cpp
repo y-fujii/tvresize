@@ -63,7 +63,7 @@ struct TVMinimizer {
 };
 
 template<class SrcView, class OrgView, class DstView>
-void constrainBox( SrcView const& src, OrgView const& org, DstView const& dst ) {
+void constrainBox( SrcView const& src, OrgView const& org, DstView const& dst, double fac ) {
 	using namespace boost::gil;
 	assert( src.dimensions() == dst.dimensions() );
 	assert( src.width() % org.width() == 0 );
@@ -76,15 +76,15 @@ void constrainBox( SrcView const& src, OrgView const& org, DstView const& dst ) 
 		for( int x = 0; x < org.width(); ++x ) {
 			for( int c = 0; c < num_channels<DstView>::value; ++c ) {
 				double s = 0.0;
-				for( int dy = 0; dy < mh; ++dy ) {
-					for( int dx = 0; dx < mw; ++dx ) {
-						s += src(x * mw + dx, y * mh + dy)[c];
+				for( int sy = y * mh; sy < y * mh + mh; ++sy ) {
+					for( int sx = x * mw; sx < x * mw + mw; ++sx ) {
+						s += src(sx, sy)[c];
 					}
 				}
-				double d = org(x, y)[c] - s * (1.0 / (mw * mh));
-				for( int dy = 0; dy < mh; ++dy ) {
-					for( int dx = 0; dx < mw; ++dx ) {
-						dst(x * mw + dx, y * mh + dy)[c] = src(x * mw + dx, y * mh + dy)[c] + d;
+				double d = (org(x, y)[c] - s * (1.0 / (mw * mh))) * fac;
+				for( int sy = y * mh; sy < y * mh + mh; ++sy ) {
+					for( int sx = x * mw; sx < x * mw + mw; ++sx ) {
+						dst(sx, sy)[c] = src(sx, sy)[c] + d;
 					}
 				}
 			}
@@ -97,10 +97,11 @@ int main( int argc, char* const* argv ) {
 
 	int scale = -1;
 	int maxCount = -1;
+	double smooth = 1.0;
 	string srcFile, dstFile;
 	try {
 		char ch;
-		while( ch = getopt( argc, argv, "s:c:" ), ch >= 0 ) {
+		while( ch = getopt( argc, argv, "s:c:f:" ), ch >= 0 ) {
 			switch( ch ) {
 				case 's':
 					scale = boost::lexical_cast<int>( optarg );
@@ -108,11 +109,14 @@ int main( int argc, char* const* argv ) {
 				case 'c':
 					maxCount = boost::lexical_cast<int>( optarg );
 					break;
+				case 'f':
+					smooth = 1.0 / boost::lexical_cast<double>( optarg );
+					break;
 				default:
 					throw exception();
 			}
 		}
-		if( scale < 0 || maxCount < 0 ) {
+		if( scale < 0 || maxCount < 0 || smooth < 1.0 ) {
 			throw exception();
 		}
 		if( argc - optind != 2 ) {
@@ -122,7 +126,7 @@ int main( int argc, char* const* argv ) {
 		dstFile = argv[optind + 1];
 	}
 	catch( exception ) {
-		cout << "Usage: tvresize -s [scale] -c [iteration count] src.png dst.png\n";
+		cout << "Usage: tvresize -s <scale> -c <iteration count> [-f <smoothness>] src.png dst.png\n";
 		return 1;
 	}
 
@@ -149,7 +153,8 @@ int main( int argc, char* const* argv ) {
 			constrainBox(
 				subimage_view( view1, 1, 1, zw, zh ),
 				view( src ),
-				subimage_view( view0, 1, 1, zw, zh )
+				subimage_view( view0, 1, 1, zw, zh ),
+				smooth
 			);
 			copy_pixels(
 				subimage_view( view0, 1, 1, zw, 1 ),
