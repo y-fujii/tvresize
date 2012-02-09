@@ -15,6 +15,23 @@
 using namespace std;
 
 
+template<class SrcView, class DstView, class Func>
+Func transform_pixel_positions_parallel( SrcView const& src , DstView const& dst, Func f ) {
+	assert( src.dimensions() == dst.dimensions() );
+
+	#pragma omp parallel for
+	for( int y = 0; y < src.height(); ++y ) {
+		typename SrcView::xy_locator srcLoc = src.xy_at( 0, y );
+		typename DstView::x_iterator dstIt = dst.row_begin( y );
+		for( int x = 0; x < src.width(); ++x ) {
+			*dstIt = f( srcLoc );
+			++srcLoc.x();
+			++dstIt;
+		}
+	}        
+	return f;
+}
+
 struct Clip {
 	boost::gil::rgb8_pixel_t operator()( boost::gil::rgb32f_pixel_t src ) {
 		return boost::gil::rgb8_pixel_t(
@@ -72,6 +89,7 @@ void constrainBox( SrcView const& src, OrgView const& org, DstView const& dst, d
 	int const mw = src.width() / org.width();
 	int const mh = src.height() / org.height();
 
+	#pragma omp parallel for
 	for( int y = 0; y < org.height(); ++y ) {
 		for( int x = 0; x < org.width(); ++x ) {
 			for( int c = 0; c < num_channels<DstView>::value; ++c ) {
@@ -110,7 +128,7 @@ int main( int argc, char* const* argv ) {
 					maxCount = boost::lexical_cast<int>( optarg );
 					break;
 				case 'f':
-					smooth = 1.0 / boost::lexical_cast<double>( optarg );
+					smooth = boost::lexical_cast<double>( optarg );
 					break;
 				default:
 					throw exception();
@@ -145,7 +163,7 @@ int main( int argc, char* const* argv ) {
 			cout << "\riter step: " << i;
 			cout.flush();
 
-			transform_pixel_positions(
+			transform_pixel_positions_parallel(
 				subimage_view( view0, 1, 1, zw, zh ),
 				subimage_view( view1, 1, 1, zw, zh ),
 				TVMinimizer<rgb32f_pixel_t, rgb32f_loc_t>()
@@ -154,7 +172,7 @@ int main( int argc, char* const* argv ) {
 				subimage_view( view1, 1, 1, zw, zh ),
 				view( src ),
 				subimage_view( view0, 1, 1, zw, zh ),
-				smooth
+				1.0 / smooth
 			);
 			copy_pixels(
 				subimage_view( view0, 1, 1, zw, 1 ),
