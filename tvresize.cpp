@@ -67,12 +67,11 @@ struct TVMinimizer {
 					- (double(src(+1, -1)[c]) + double(src(-1, +1)[c]))
 				);  
 				double np = ( 
-					(
-						+ (dx * dx) * (double(src( 0, +1)[c]) + double(src( 0, -1)[c]))
-						+ (dy * dy) * (double(src(+1,  0)[c]) + double(src(-1,  0)[c]))
-					) * 2.0 - dx * dy * dxdy
+					+ (dx * dx) * (double(src( 0, +1)[c]) + double(src( 0, -1)[c]))
+					+ (dy * dy) * (double(src(+1,  0)[c]) + double(src(-1,  0)[c]))
+					- dx * dy * dxdy * (1.0 / 2.0)
 				) / (dx * dx + dy * dy);
-				dst[c] = (src(0, 0)[c] + np) * (1.0 / 5.0);
+				dst[c] = (np + src(0, 0)[c]) * (1.0 / 3.0);
 			}   
 		}   
 		return dst;
@@ -80,10 +79,10 @@ struct TVMinimizer {
 };
 
 template<class SrcView, class OrgView, class DstView>
-void constrainBox( SrcView const& src, OrgView const& org, DstView const& dst, double fac ) {
+void addConstraint( SrcView const& src, OrgView const& org, DstView const& dst, double fac ) {
 	using namespace boost::gil;
 	assert( src.dimensions() == dst.dimensions() );
-	assert( src.width() % org.width() == 0 );
+	assert( src.width()  % org.width()  == 0 );
 	assert( src.height() % org.height() == 0 );
 
 	int const mw = src.width() / org.width();
@@ -102,11 +101,59 @@ void constrainBox( SrcView const& src, OrgView const& org, DstView const& dst, d
 				double d = (org(x, y)[c] - s * (1.0 / (mw * mh))) * fac;
 				for( int sy = y * mh; sy < y * mh + mh; ++sy ) {
 					for( int sx = x * mw; sx < x * mw + mw; ++sx ) {
-						dst(sx, sy)[c] = src(sx, sy)[c] + d;
+						dst(sx, sy)[c] += d;
 					}
 				}
 			}
 		}
+	}
+}
+
+template<class SrcView, class OrgView, class DstView>
+void iterate( SrcView const& src, OrgView const& org, DstView const& dst, double fac ) {
+	using namespace boost::gil;
+
+	int const zw = src.width()  - 2;
+	int const zh = src.height() - 2;
+
+	assert( src.dimensions() == dst.dimensions() );
+	assert( src.width()  == dst.width()  );
+	assert( src.height() == dst.height() );
+	assert( zw % org.width()  == 0 );
+	assert( zh % org.height() == 0 );
+
+	transform_pixel_positions_parallel(
+		subimage_view( src, 1, 1, zw, zh ),
+		subimage_view( dst, 1, 1, zw, zh ),
+		TVMinimizer<rgb32f_pixel_t, rgb32f_loc_t>()
+	);
+	addConstraint(
+		subimage_view( src, 1, 1, zw, zh ),
+		org,
+		subimage_view( dst, 1, 1, zw, zh ),
+		fac
+	);
+	copy_pixels(
+		subimage_view( dst, 1, 1, zw, 1 ),
+		subimage_view( dst, 1, 0, zw, 1 )
+	);
+	copy_pixels(
+		subimage_view( dst, 1, zh    , zw, 1 ),
+		subimage_view( dst, 1, zh + 1, zw, 1 )
+	);
+	copy_pixels(
+		subimage_view( dst, 1, 1, 1, zh ),
+		subimage_view( dst, 0, 1, 1, zh )
+	);
+	copy_pixels(
+		subimage_view( dst, zw    , 1, 1, zh ),
+		subimage_view( dst, zw + 1, 1, 1, zh )
+	);
+	for( int c = 0; c < 3; ++c ) {
+		dst(     0,      0)[c] = dst( 1, 0)[c] + dst(0,  1)[c] - dst(     1,      1)[c];
+		dst(zw + 1,      0)[c] = dst(zw, 0)[c] + dst(0,  1)[c] - dst(zw + 1,      1)[c];
+		dst(     0, zh + 1)[c] = dst( 1, 0)[c] + dst(0, zh)[c] - dst(     1, zh + 1)[c];
+		dst(zw + 1, zh + 1)[c] = dst(zw, 0)[c] + dst(0, zh)[c] - dst(zw + 1, zh + 1)[c];
 	}
 }
 
@@ -151,7 +198,7 @@ int main( int argc, char* const* argv ) {
 	try {
 		rgb32f_image_t src;
 		png_read_and_convert_image( srcFile, src );
-		int const zw = src.width() * scale;
+		int const zw = src.width()  * scale;
 		int const zh = src.height() * scale;
 		rgb32f_image_t img0( zw + 2, zh + 2 );
 		rgb32f_image_t img1( zw + 2, zh + 2 );
@@ -163,39 +210,8 @@ int main( int argc, char* const* argv ) {
 			cout << "\riter step: " << i;
 			cout.flush();
 
-			transform_pixel_positions_parallel(
-				subimage_view( view0, 1, 1, zw, zh ),
-				subimage_view( view1, 1, 1, zw, zh ),
-				TVMinimizer<rgb32f_pixel_t, rgb32f_loc_t>()
-			);
-			constrainBox(
-				subimage_view( view1, 1, 1, zw, zh ),
-				view( src ),
-				subimage_view( view0, 1, 1, zw, zh ),
-				1.0 / smooth
-			);
-			copy_pixels(
-				subimage_view( view0, 1, 1, zw, 1 ),
-				subimage_view( view0, 1, 0, zw, 1 )
-			);
-			copy_pixels(
-				subimage_view( view0, 1, zh    , zw, 1 ),
-				subimage_view( view0, 1, zh + 1, zw, 1 )
-			);
-			copy_pixels(
-				subimage_view( view0, 1, 1, 1, zh ),
-				subimage_view( view0, 0, 1, 1, zh )
-			);
-			copy_pixels(
-				subimage_view( view0, zw    , 1, 1, zh ),
-				subimage_view( view0, zw + 1, 1, 1, zh )
-			);
-			for( int c = 0; c < 3; ++c ) {
-				view0(     0,      0)[c] = view0( 1, 0)[c] + view0(0,  1)[c] - view0(     1,      1)[c];
-				view0(zw + 1,      0)[c] = view0(zw, 0)[c] + view0(0,  1)[c] - view0(zw + 1,      1)[c];
-				view0(     0, zh + 1)[c] = view0( 1, 0)[c] + view0(0, zh)[c] - view0(     1, zh + 1)[c];
-				view0(zw + 1, zh + 1)[c] = view0(zw, 0)[c] + view0(0, zh)[c] - view0(zw + 1, zh + 1)[c];
-			}
+			iterate( view0, view( src ), view1, 1.0 / smooth );
+			iterate( view1, view( src ), view0, 1.0 / smooth );
 		}
 		cout << endl;
 
